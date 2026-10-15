@@ -6,14 +6,17 @@
 # One-liner (after hosting in a repo/gist you control):
 #   curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh | bash
 #
-# Strategy: install the compiled native dependencies (numpy, capstone, lief,
-# pyelftools) from conda-forge, which ships precompiled binaries for all four
-# platforms above (so nothing builds from source and there are no pip "wheel"
-# failures). fastembed is installed with pip — it ships prebuilt ONNX-runtime
-# wheels for arm64 and is the lightweight replacement Ablation now uses instead
-# of sentence-transformers/torch. Finally install Ablation itself with pip
-# --no-deps. On macOS, if the conda-forge lief build is unavailable, fall back
-# to Homebrew's prebuilt bottle.
+# Strategy: create a conda env, then install every dependency INTO that env so
+# the env's own Python can import them:
+#   * numpy / capstone / pyelftools  -> conda-forge (precompiled, all platforms)
+#   * lief                           -> pip, into the env (PyPI ships prebuilt
+#                                       arm64/x86_64 wheels; this is the piece a
+#                                       plain install gets wrong — Homebrew's lief
+#                                       lands in Homebrew's Python, NOT the env)
+#   * fastembed                      -> pip (prebuilt ONNX wheels; the lightweight
+#                                       replacement Ablation uses instead of
+#                                       sentence-transformers/torch)
+#   * ablation                       -> pip --no-deps (deps satisfied above)
 #
 # Env overrides:  ABLATION_ENV=<name>  ABLATION_PY=<version>
 set -euo pipefail
@@ -25,7 +28,7 @@ REPO="git+https://github.com/Ablation-Tool/ablation"
 say() { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mError:\033[0m %s\n' "$*" >&2; exit 1; }
 
-# --- 0. Detect platform (for messaging + fallback decisions) -----------------
+# --- 0. Detect platform ------------------------------------------------------
 os="$(uname -s)"; arch="$(uname -m)"
 say "Platform: $os / $arch"
 
@@ -44,37 +47,42 @@ else
 fi
 conda activate "$ENV_NAME"
 
-# --- 2. Compiled native deps from conda-forge (precompiled for every platform)
-say "Installing native dependencies from conda-forge..."
-if ! conda install -c conda-forge -y \
-      "numpy>=1.26" \
-      "capstone>=5" \
-      "lief>=0.16" \
-      "pyelftools>=0.29"; then
+# --- 2. Compiled native deps from conda-forge --------------------------------
+say "Installing numpy / capstone / pyelftools from conda-forge..."
+conda install -c conda-forge -y "numpy>=1.26" "capstone>=5" "pyelftools>=0.29"
 
-  # Fallback: retry without lief, then get lief from Homebrew (macOS only).
-  say "conda-forge install failed; retrying without lief..."
-  conda install -c conda-forge -y \
-      "numpy>=1.26" "capstone>=5" "pyelftools>=0.29"
-
-  if [ "$os" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
-    say "Installing lief via Homebrew (prebuilt arm64/x86_64 bottle)..."
-    brew list lief >/dev/null 2>&1 || brew install lief
-  else
-    die "Could not install lief from conda-forge and no Homebrew fallback is available on this platform.
-Install lief manually, then re-run this script."
+# --- 3. lief — INTO the env, BEFORE Ablation ---------------------------------
+# pip pulls the prebuilt arm64/x86_64 wheel from PyPI straight into this env, so
+# `import lief` resolves here. (Homebrew's lief would install outside the env and
+# not be importable — that's the usual "cannot find lief" cause on Apple Silicon.)
+say "Installing lief into the env (prebuilt wheel)..."
+if ! pip install "lief>=0.16"; then
+  say "No lief wheel for this interpreter; trying conda-forge..."
+  if ! conda install -c conda-forge -y "lief>=0.16"; then
+    if [ "$os" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+      # Last resort: Homebrew bottle, then expose its bindings to THIS env.
+      say "Falling back to Homebrew lief and linking it into the env..."
+      brew list lief >/dev/null 2>&1 || brew install lief
+      brew_site="$(brew --prefix lief)/lib/python${PY_VERSION}/site-packages"
+      if [ -d "$brew_site" ]; then
+        printf '%s\n' "$brew_site" > \
+          "$(python -c 'import site; print(site.getsitepackages()[0])')/homebrew-lief.pth"
+      fi
+    fi
   fi
 fi
+python -c "import lief" 2>/dev/null || \
+  die "lief still not importable in env '$ENV_NAME'. Run 'conda activate $ENV_NAME' then 'pip install lief' and retry."
 
-# --- 3. fastembed from pip (prebuilt ONNX wheels; lightweight, arm64-ready) ---
+# --- 4. fastembed from pip ---------------------------------------------------
 say "Installing fastembed..."
 pip install "fastembed>=0.3.0"
 
-# --- 4. Ablation itself (no dep re-resolution; deps satisfied above) ---------
+# --- 5. Ablation itself (no dep re-resolution; deps satisfied above) ---------
 say "Installing Ablation..."
 pip install --no-deps "$REPO"
 
-# --- 5. Verify ---------------------------------------------------------------
+# --- 6. Verify ---------------------------------------------------------------
 say "Verifying imports..."
 python - <<'PY'
 import importlib, sys
