@@ -365,6 +365,7 @@ pip install ablation-tool
 ```
 
 **macOS (pipx):**
+Requires pipx - can be installed via Homebrew
 
 ```bash
 pipx install ablation-tool
