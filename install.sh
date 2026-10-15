@@ -6,11 +6,14 @@
 # One-liner (after hosting in a repo/gist you control):
 #   curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh | bash
 #
-# Strategy: install every native dependency from conda-forge, which ships
-# precompiled binaries for all four platforms above (so nothing builds from
-# source and there are no pip "wheel" failures), then install Ablation itself
-# with pip --no-deps. On macOS, if the conda-forge lief build is unavailable,
-# fall back to Homebrew's prebuilt bottle.
+# Strategy: install the compiled native dependencies (numpy, capstone, lief,
+# pyelftools) from conda-forge, which ships precompiled binaries for all four
+# platforms above (so nothing builds from source and there are no pip "wheel"
+# failures). fastembed is installed with pip — it ships prebuilt ONNX-runtime
+# wheels for arm64 and is the lightweight replacement Ablation now uses instead
+# of sentence-transformers/torch. Finally install Ablation itself with pip
+# --no-deps. On macOS, if the conda-forge lief build is unavailable, fall back
+# to Homebrew's prebuilt bottle.
 #
 # Env overrides:  ABLATION_ENV=<name>  ABLATION_PY=<version>
 set -euo pipefail
@@ -41,19 +44,18 @@ else
 fi
 conda activate "$ENV_NAME"
 
-# --- 2. Native deps from conda-forge (precompiled for every platform) --------
+# --- 2. Compiled native deps from conda-forge (precompiled for every platform)
 say "Installing native dependencies from conda-forge..."
 if ! conda install -c conda-forge -y \
       "numpy>=1.26" \
       "capstone>=5" \
-      "lief>=0.14" \
-      "pyelftools>=0.29" \
-      "sentence-transformers>=2.3"; then
+      "lief>=0.16" \
+      "pyelftools>=0.29"; then
 
   # Fallback: retry without lief, then get lief from Homebrew (macOS only).
   say "conda-forge install failed; retrying without lief..."
   conda install -c conda-forge -y \
-      "numpy>=1.26" "capstone>=5" "pyelftools>=0.29" "sentence-transformers>=2.3"
+      "numpy>=1.26" "capstone>=5" "pyelftools>=0.29"
 
   if [ "$os" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
     say "Installing lief via Homebrew (prebuilt arm64/x86_64 bottle)..."
@@ -64,16 +66,20 @@ Install lief manually, then re-run this script."
   fi
 fi
 
-# --- 3. Ablation itself (pure Python; no dep re-resolution) ------------------
+# --- 3. fastembed from pip (prebuilt ONNX wheels; lightweight, arm64-ready) ---
+say "Installing fastembed..."
+pip install "fastembed>=0.3.0"
+
+# --- 4. Ablation itself (no dep re-resolution; deps satisfied above) ---------
 say "Installing Ablation..."
 pip install --no-deps "$REPO"
 
-# --- 4. Verify ---------------------------------------------------------------
+# --- 5. Verify ---------------------------------------------------------------
 say "Verifying imports..."
 python - <<'PY'
 import importlib, sys
 bad = []
-for m in ["lief", "numpy", "capstone", "elftools", "ablation"]:
+for m in ["lief", "numpy", "capstone", "elftools", "fastembed", "ablation"]:
     try:
         importlib.import_module(m)
     except Exception as e:
