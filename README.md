@@ -370,6 +370,20 @@ pip install ablation-tool
 pipx install ablation-tool
 ```
 
+**One-line install (all platforms):**
+
+Installs every native dependency from conda-forge (precompiled for macOS Apple
+Silicon/Intel and Linux x86_64/aarch64 — no source builds, no pip "wheel" errors),
+then installs Ablation itself. Requires [conda / Miniforge](https://github.com/conda-forge/miniforge).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tinytanium425/ablation/main/install.sh | bash
+```
+
+Prefer to review before running? `curl -fsSL <url> -o install.sh && less install.sh && bash install.sh`.
+Custom environment name or Python version: `ABLATION_ENV=myenv ABLATION_PY=3.12 curl -fsSL <url> | bash`.
+The script is idempotent and falls back to Homebrew for `lief` on macOS if needed.
+
 ---
 
 </details>
